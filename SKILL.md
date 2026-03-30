@@ -1,6 +1,6 @@
 ---
 name: keywords-manager
-description: Manage persistent SEO and GEO keyword inventories in a local SQLite database. Use when Codex needs to import keyword CSV files with deduplication, prevent duplicate imports, manage categories, sites, or languages, fetch the first unused keyword by priority, mark keywords as used, update published URLs, priority, KD, or JSON metadata, delete category data, or rebuild the keyword database safely across skill upgrades.
+description: Manage persistent SEO and GEO keyword inventories in a local SQLite database. Use when Codex needs to import keyword CSV files or public CSV URLs with deduplication, prevent duplicate imports, manage categories, sites, or languages, fetch the first unused keyword by priority, mark keywords as used, update published URLs, priority, KD, or JSON metadata, delete category data, or rebuild the keyword database safely across skill upgrades.
 ---
 
 # Keywords Manager
@@ -67,6 +67,13 @@ Import a CSV file into a category:
 bin/keywords-manager import-csv --file keywords.csv --category seo --column keyword --site blog.example.com --language en --priority 5 --kd 18
 ```
 
+Import from a public CSV URL or Google Sheets public link:
+
+```bash
+bin/keywords-manager import-url --url https://example.com/keywords.csv --category seo --column keyword --site blog.example.com --language en
+bin/keywords-manager import-url --url "https://docs.google.com/spreadsheets/d/<sheet-id>/edit#gid=0" --category seo --column keyword --site blog.example.com --language-column language
+```
+
 Fetch the first unused keyword:
 
 ```bash
@@ -125,6 +132,7 @@ bin/keywords-manager rebuild-db --yes
 
 - Prefer the CLI for all mutations so migration and validation logic stays centralized.
 - Use `site` and `language` filters as the primary uniqueness scope for multi-site publishing targets.
+- `import-url` accepts public CSV links and normalizes common Google Sheets links into CSV export URLs.
 - `get-next` prefers higher `priority` and then lower `kd`.
 - Use `mark-used`, `mark-unused`, or `archive` rather than editing rows manually.
 - Use category deletion for scoped cleanup and `rebuild-db --yes` only for full reset.

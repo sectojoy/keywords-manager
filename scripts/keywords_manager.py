@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import os
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
-from urllib.parse import urlparse
+from typing import Any, Iterable, TextIO
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 SCHEMA_VERSION = 3
 VALID_STATUSES = ("unused", "used", "archived")
@@ -116,6 +119,86 @@ def validate_published_url(url: str | None) -> str | None:
     if len(url) > 2048:
         raise UsageError("Published URL must be 2048 characters or fewer.")
     return url
+
+
+def normalize_import_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if not url:
+        raise UsageError("URL must not be empty.")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise UsageError("Import URL must use http or https.")
+    if not parsed.netloc:
+        raise UsageError("Import URL must include a hostname.")
+
+    if parsed.netloc == "docs.google.com":
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if len(path_parts) >= 3 and path_parts[0] == "spreadsheets" and path_parts[1] == "d":
+            sheet_id = path_parts[2]
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            gid = None
+            if "gid" in query and query["gid"]:
+                gid = query["gid"][0]
+            elif parsed.fragment.startswith("gid="):
+                gid = parsed.fragment.split("=", 1)[1]
+
+            export_query = {"format": "csv"}
+            if gid:
+                export_query["gid"] = gid
+
+            return urlunparse(
+                (
+                    parsed.scheme,
+                    parsed.netloc,
+                    f"/spreadsheets/d/{sheet_id}/export",
+                    "",
+                    urlencode(export_query),
+                    "",
+                )
+            )
+
+    return url
+
+
+def download_import_url(url: str, timeout: float = 30.0) -> tuple[Path, str]:
+    normalized_url = normalize_import_url(url)
+    request = Request(
+        normalized_url,
+        headers={
+            "User-Agent": "keywords-manager/1.0",
+            "Accept": "text/csv,application/csv,text/plain;q=0.9,*/*;q=0.1",
+        },
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+    except OSError as exc:
+        raise UsageError(f"Failed to download CSV from URL: {exc}") from exc
+
+    if not payload:
+        raise UsageError("Downloaded CSV is empty.")
+
+    tmp = tempfile.NamedTemporaryFile(prefix="keywords-manager-import-", suffix=".csv", delete=False)
+    tmp_path = Path(tmp.name)
+    with tmp:
+        tmp.write(payload)
+    return tmp_path, normalized_url
+
+
+def merge_extra_metadata(extra_json: str | None, metadata: dict[str, Any] | None) -> str | None:
+    base: dict[str, Any] = {}
+    if extra_json:
+        parsed = json.loads(parse_extra_json(extra_json))
+        if isinstance(parsed, dict):
+            base.update(parsed)
+        else:
+            base["value"] = parsed
+    if metadata:
+        base.update(metadata)
+    if not base:
+        return None
+    return json.dumps(base, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def default_db_path() -> Path:
@@ -436,63 +519,67 @@ def command_init_db(args: argparse.Namespace) -> int:
         conn.close()
 
 
-def iter_import_rows(args: argparse.Namespace, csv_path: Path) -> Iterable[dict[str, Any]]:
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        if args.column_index is not None:
-            reader = csv.reader(handle)
-            for row_number, row in enumerate(reader, start=1):
-                if not row:
-                    continue
-                if args.column_index >= len(row):
-                    raise UsageError(
-                        f"CSV row {row_number} does not contain column index {args.column_index}."
-                    )
-                yield {
-                    "row_number": row_number,
-                    "keyword_raw": row[args.column_index],
-                    "site": args.site,
-                    "language": args.language,
-                    "priority": args.priority,
-                    "kd": args.kd,
-                }
-            return
-
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise UsageError("CSV file is missing a header row.")
-        assert args.column is not None
-        required_columns = [args.column]
-        optional_columns = [
-            args.site_column,
-            args.language_column,
-            args.priority_column,
-            args.kd_column,
-        ]
-        for column_name in [*required_columns, *[col for col in optional_columns if col]]:
-            if column_name not in reader.fieldnames:
+def iter_import_rows_from_handle(args: argparse.Namespace, handle: TextIO) -> Iterable[dict[str, Any]]:
+    if args.column_index is not None:
+        reader = csv.reader(handle)
+        for row_number, row in enumerate(reader, start=1):
+            if not row:
+                continue
+            if args.column_index >= len(row):
                 raise UsageError(
-                    f"CSV column '{column_name}' not found. Available columns: {', '.join(reader.fieldnames)}"
+                    f"CSV row {row_number} does not contain column index {args.column_index}."
                 )
-        if args.column not in reader.fieldnames:
-            raise UsageError(
-                f"CSV column '{args.column}' not found. Available columns: {', '.join(reader.fieldnames)}"
-            )
-        for row_number, row in enumerate(reader, start=2):
             yield {
                 "row_number": row_number,
-                "keyword_raw": row.get(args.column, ""),
-                "site": row.get(args.site_column, "") if args.site_column else args.site,
-                "language": row.get(args.language_column, "") if args.language_column else args.language,
-                "priority": row.get(args.priority_column, "") if args.priority_column else args.priority,
-                "kd": row.get(args.kd_column, "") if args.kd_column else args.kd,
+                "keyword_raw": row[args.column_index],
+                "site": args.site,
+                "language": args.language,
+                "priority": args.priority,
+                "kd": args.kd,
             }
+        return
+
+    reader = csv.DictReader(handle)
+    if reader.fieldnames is None:
+        raise UsageError("CSV file is missing a header row.")
+    assert args.column is not None
+    required_columns = [args.column]
+    optional_columns = [
+        args.site_column,
+        args.language_column,
+        args.priority_column,
+        args.kd_column,
+    ]
+    for column_name in [*required_columns, *[col for col in optional_columns if col]]:
+        if column_name not in reader.fieldnames:
+            raise UsageError(
+                f"CSV column '{column_name}' not found. Available columns: {', '.join(reader.fieldnames)}"
+            )
+    if args.column not in reader.fieldnames:
+        raise UsageError(
+            f"CSV column '{args.column}' not found. Available columns: {', '.join(reader.fieldnames)}"
+        )
+    for row_number, row in enumerate(reader, start=2):
+        yield {
+            "row_number": row_number,
+            "keyword_raw": row.get(args.column, ""),
+            "site": row.get(args.site_column, "") if args.site_column else args.site,
+            "language": row.get(args.language_column, "") if args.language_column else args.language,
+            "priority": row.get(args.priority_column, "") if args.priority_column else args.priority,
+            "kd": row.get(args.kd_column, "") if args.kd_column else args.kd,
+        }
+
+
+def iter_import_rows(args: argparse.Namespace, csv_path: Path) -> Iterable[dict[str, Any]]:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        yield from iter_import_rows_from_handle(args, handle)
 
 
 def command_import_csv(args: argparse.Namespace) -> int:
     csv_path = Path(args.file).expanduser()
     if not csv_path.exists():
         raise UsageError(f"CSV file not found: {csv_path}")
-    static_extra = parse_extra_json(args.extra_json) if args.extra_json else None
+    static_extra = merge_extra_metadata(args.extra_json, None)
 
     conn = open_connection(args.db_path)
     try:
@@ -556,6 +643,91 @@ def command_import_csv(args: argparse.Namespace) -> int:
         )
         return 0
     finally:
+        conn.close()
+
+
+def command_import_url(args: argparse.Namespace) -> int:
+    tmp_path, normalized_url = download_import_url(args.url, timeout=args.url_timeout)
+    static_extra = merge_extra_metadata(args.extra_json, {"source_url": normalized_url})
+
+    conn = open_connection(args.db_path)
+    try:
+        ensure_ready(conn)
+        inserted = 0
+        skipped_duplicate = 0
+        invalid = 0
+
+        with tmp_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            with conn:
+                category = get_or_create_category(conn, args.category)
+                for row in iter_import_rows_from_handle(args, handle):
+                    try:
+                        keyword_raw = " ".join(str(row["keyword_raw"]).split())
+                        keyword = normalize_keyword(str(row["keyword_raw"]))
+                        site = canonicalize_site(row["site"]) if row["site"] else ""
+                        language = canonicalize_language(row["language"]) if row["language"] else ""
+                        priority = parse_priority(row["priority"])
+                        kd = parse_kd(row["kd"])
+                    except UsageError:
+                        invalid += 1
+                        continue
+
+                    now = utc_now()
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO keywords (
+                            category_id,
+                            site,
+                            language,
+                            keyword_raw,
+                            keyword,
+                            status,
+                            priority,
+                            kd,
+                            used_at,
+                            published_url,
+                            extra,
+                            created_at,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'unused', ?, ?, NULL, NULL, ?, ?, ?)
+                        """,
+                        (
+                            category["id"],
+                            site,
+                            language,
+                            keyword_raw,
+                            keyword,
+                            priority,
+                            kd,
+                            static_extra,
+                            now,
+                            now,
+                        ),
+                    )
+                    if cursor.rowcount == 1:
+                        inserted += 1
+                    else:
+                        skipped_duplicate += 1
+
+        print_json(
+            {
+                "category": category["category"],
+                "db_path": str(args.db_path),
+                "inserted": inserted,
+                "invalid": invalid,
+                "language": canonicalize_language(args.language) if args.language else None,
+                "site": canonicalize_site(args.site) if args.site else None,
+                "skipped_duplicate": skipped_duplicate,
+                "source_url": normalized_url,
+                "status": "ok",
+            }
+        )
+        return 0
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
         conn.close()
 
 
@@ -1064,6 +1236,24 @@ def build_parser() -> argparse.ArgumentParser:
     import_csv.add_argument("--extra-json")
     import_csv.set_defaults(func=command_import_csv)
 
+    import_url = subparsers.add_parser("import-url", help="Import keywords from a public CSV URL.")
+    import_url.add_argument("--url", required=True)
+    import_url.add_argument("--category", required=True)
+    import_url_group = import_url.add_mutually_exclusive_group()
+    import_url_group.add_argument("--column", default="keyword")
+    import_url_group.add_argument("--column-index", type=int)
+    import_url.add_argument("--site")
+    import_url.add_argument("--site-column")
+    import_url.add_argument("--language")
+    import_url.add_argument("--language-column")
+    import_url.add_argument("--priority", type=int, default=0)
+    import_url.add_argument("--priority-column")
+    import_url.add_argument("--kd", type=int)
+    import_url.add_argument("--kd-column")
+    import_url.add_argument("--extra-json")
+    import_url.add_argument("--url-timeout", type=float, default=30.0)
+    import_url.set_defaults(func=command_import_url)
+
     export_csv = subparsers.add_parser("export-csv", help="Export keywords to a CSV file.")
     export_csv.add_argument("--file", required=True)
     export_csv.add_argument("--category")
@@ -1195,18 +1385,22 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if args.command in {"list", "export-csv"} and args.limit <= 0:
         raise UsageError("--limit must be greater than zero.")
 
-    if args.command == "import-csv" and args.column_index is not None and args.column_index < 0:
+    if args.command in {"import-csv", "import-url"} and args.column_index is not None and args.column_index < 0:
         raise UsageError("--column-index must be zero or greater.")
-    if args.command == "import-csv" and args.column_index is not None:
+    if args.command in {"import-csv", "import-url"} and args.column_index is not None:
         if any([args.site_column, args.language_column, args.priority_column, args.kd_column]):
             raise UsageError("Column-based site/language/priority/kd import requires header mode, not --column-index.")
-    if args.command == "import-csv":
+    if args.command in {"import-csv", "import-url"}:
         parse_priority(args.priority)
         parse_kd(args.kd)
         if args.site:
             canonicalize_site(args.site)
         if args.language:
             canonicalize_language(args.language)
+    if args.command == "import-url":
+        normalize_import_url(args.url)
+        if args.url_timeout <= 0:
+            raise UsageError("--url-timeout must be greater than zero.")
     if args.command in {"get-next", "list", "export-csv"}:
         if getattr(args, "site", None):
             canonicalize_site(args.site)

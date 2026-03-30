@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import functools
 import importlib.util
+import http.server
 import json
 import os
 import sqlite3
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -80,6 +84,13 @@ class KeywordsManagerUnitTests(unittest.TestCase):
     def test_site_and_language_are_canonicalized(self):
         self.assertEqual(self.module.canonicalize_site("https://Blog.Example.com/path"), "blog.example.com")
         self.assertEqual(self.module.canonicalize_language("ZH_CN"), "zh-cn")
+
+    def test_google_sheet_url_is_normalized_to_csv_export(self):
+        url = "https://docs.google.com/spreadsheets/d/abc123/edit#gid=456"
+        self.assertEqual(
+            self.module.normalize_import_url(url),
+            "https://docs.google.com/spreadsheets/d/abc123/export?format=csv&gid=456",
+        )
 
     def test_migrate_v1_database_to_current(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,6 +172,43 @@ class KeywordsManagerCliIntegrationTests(unittest.TestCase):
 
     def tearDown(self):
         self.tempdir.cleanup()
+
+    def test_import_url_downloads_public_csv(self):
+        csv_path = Path(self.tempdir.name) / "remote.csv"
+        csv_path.write_text("keyword,language,priority\nRemote Alpha,en,4\nRemote Beta,en,2\n", encoding="utf-8")
+
+        handler = functools.partial(
+            http.server.SimpleHTTPRequestHandler,
+            directory=self.tempdir.name,
+        )
+        with socketserver.TCPServer(("127.0.0.1", 0), handler) as server:
+            server.allow_reuse_address = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{server.server_address[1]}/remote.csv"
+                summary = self.run_cli(
+                    "import-url",
+                    "--url",
+                    url,
+                    "--category",
+                    "SEO",
+                    "--site",
+                    "example.com",
+                    "--language-column",
+                    "language",
+                    "--priority-column",
+                    "priority",
+                )
+            finally:
+                server.shutdown()
+                thread.join()
+
+        self.assertEqual(summary["inserted"], 2)
+        self.assertEqual(summary["source_url"], url)
+        items = self.run_cli("list", "--category", "SEO", "--site", "example.com")["items"]
+        self.assertEqual([item["keyword"] for item in items], ["remote alpha", "remote beta"])
+        self.assertIn('"source_url":"', items[0]["extra"])
 
     def test_import_deduplicates_and_advances_unused_queue(self):
         self.csv_path.write_text("keyword\nSEO Tool\nseo tool\nGeo Strategy\n", encoding="utf-8")

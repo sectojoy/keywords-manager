@@ -7,6 +7,7 @@ Implement a `keywords-manager` skill for managing SEO and GEO keywords with pers
 The skill must support:
 
 - Importing keywords from CSV
+- Importing keywords from public CSV URLs
 - Deduplicated import
 - Preventing repeated imports
 - Updating keyword state such as `used`
@@ -272,7 +273,19 @@ Optional but recommended:
 - support `extra` mapping from a JSON column or static import metadata
 - support dry run mode
 
-### 8.2 Query First Unused Keyword
+### 8.2 URL Import
+
+The skill should support importing from public CSV URLs.
+
+Required behavior:
+
+- accept a public `http` or `https` URL
+- download the remote CSV before import
+- reuse the same import validation and deduplication rules as local CSV import
+- support public Google Sheets links by normalizing them to CSV export URLs
+- store source URL metadata in `extra`
+
+### 8.3 Query First Unused Keyword
 
 The skill must support querying the first unused keyword.
 
@@ -298,7 +311,7 @@ If priority is added later, revise to:
 ORDER BY priority DESC, created_at ASC, id ASC
 ```
 
-### 8.3 CSV Export
+### 8.4 CSV Export
 
 The skill should support exporting filtered keyword data to CSV.
 
@@ -322,7 +335,7 @@ Recommended export columns:
 - `created_at`
 - `updated_at`
 
-### 8.4 Update Keyword State
+### 8.5 Update Keyword State
 
 The skill must support updating keyword state.
 
@@ -344,7 +357,7 @@ Secondary targeting:
 - update by `site + language + keyword`
 - optionally include `category` as an extra filter
 
-### 8.5 Bulk Update
+### 8.6 Bulk Update
 
 The skill should support CSV-based batch updates for downstream workflows.
 
@@ -356,7 +369,7 @@ Required behavior:
 - support a configurable clear token for nullable fields
 - report `updated`, `unchanged`, `missing`, and `invalid`
 
-### 8.6 Category Query
+### 8.7 Category Query
 
 The skill must support querying by category.
 
@@ -366,7 +379,7 @@ Required operations:
 - list keywords for a category
 - query first unused keyword for a category
 
-### 8.7 Category Maintenance
+### 8.8 Category Maintenance
 
 The skill must support category-level maintenance.
 
@@ -380,7 +393,7 @@ Deletion behavior:
 
 - deleting a category deletes all related keywords through foreign key cascade
 
-### 8.8 Database Rebuild
+### 8.9 Database Rebuild
 
 The skill must support full database rebuild.
 
@@ -409,6 +422,7 @@ Recommended commands:
 ```text
 keywords-manager init-db
 keywords-manager import-csv --file <path> --category <name> [--column <name>] [--site <domain>] [--language <code>] [--priority <int>] [--kd <int>]
+keywords-manager import-url --url <public-csv-url> --category <name> [--column <name>] [--site <domain>] [--language <code>] [--priority <int>] [--kd <int>]
 keywords-manager export-csv --file <path> [--category <name>] [--site <domain>] [--language <code>] [--status unused]
 keywords-manager bulk-update --file <path>
 keywords-manager get-next --category <name> [--site <domain>] [--language <code>]
