@@ -1,0 +1,4 @@
+interface:
+  display_name: "Keywords Manager"
+  short_description: "Manage SEO and GEO keyword inventories"
+  default_prompt: "Use $keywords-manager to import, deduplicate, categorize, and update a local SEO/GEO keyword database."
