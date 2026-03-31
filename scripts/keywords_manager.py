@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 SCHEMA_VERSION = 3
 VALID_STATUSES = ("unused", "used", "archived")
-DEFAULT_CODEX_HOME = Path.home() / ".codex"
+DEFAULT_DATA_ROOT = Path.home() / ".data"
 
 
 class UsageError(Exception):
@@ -206,9 +206,11 @@ def default_db_path() -> Path:
     if override:
         return Path(override).expanduser()
 
-    codex_home = os.environ.get("CODEX_HOME")
-    base_dir = Path(codex_home).expanduser() if codex_home else DEFAULT_CODEX_HOME
-    return base_dir / "data" / "keywords-manager" / "keywords.db"
+    data_dir_override = os.environ.get("KEYWORDS_MANAGER_DATA_DIR")
+    if data_dir_override:
+        return Path(data_dir_override).expanduser() / "keywords.db"
+
+    return DEFAULT_DATA_ROOT / "keywords-manager" / "keywords.db"
 
 
 def open_connection(db_path: Path) -> sqlite3.Connection:

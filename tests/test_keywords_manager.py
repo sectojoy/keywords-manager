@@ -58,28 +58,40 @@ class KeywordsManagerUnitTests(unittest.TestCase):
             finally:
                 conn.close()
 
-    def test_default_db_path_prefers_codex_home_then_env_override(self):
-        old_codex_home = os.environ.get("CODEX_HOME")
+    def test_default_db_path_prefers_env_overrides_then_user_data_dir(self):
         old_db_override = os.environ.get("KEYWORDS_MANAGER_DB")
+        old_data_dir_override = os.environ.get("KEYWORDS_MANAGER_DATA_DIR")
         try:
-            os.environ["CODEX_HOME"] = "/tmp/codex-home"
             os.environ.pop("KEYWORDS_MANAGER_DB", None)
+            os.environ.pop("KEYWORDS_MANAGER_DATA_DIR", None)
             self.assertEqual(
                 self.module.default_db_path(),
-                Path("/tmp/codex-home/data/keywords-manager/keywords.db"),
+                Path.home() / ".data" / "keywords-manager" / "keywords.db",
+            )
+
+            os.environ["KEYWORDS_MANAGER_DATA_DIR"] = "/tmp/keywords-data"
+            self.assertEqual(
+                self.module.default_db_path(),
+                Path("/tmp/keywords-data/keywords.db"),
+            )
+
+            os.environ["CODEX_HOME"] = "/tmp/codex-home"
+            self.assertEqual(
+                self.module.default_db_path(),
+                Path("/tmp/keywords-data/keywords.db"),
             )
 
             os.environ["KEYWORDS_MANAGER_DB"] = "/tmp/custom.db"
             self.assertEqual(self.module.default_db_path(), Path("/tmp/custom.db"))
         finally:
-            if old_codex_home is None:
-                os.environ.pop("CODEX_HOME", None)
-            else:
-                os.environ["CODEX_HOME"] = old_codex_home
             if old_db_override is None:
                 os.environ.pop("KEYWORDS_MANAGER_DB", None)
             else:
                 os.environ["KEYWORDS_MANAGER_DB"] = old_db_override
+            if old_data_dir_override is None:
+                os.environ.pop("KEYWORDS_MANAGER_DATA_DIR", None)
+            else:
+                os.environ["KEYWORDS_MANAGER_DATA_DIR"] = old_data_dir_override
 
     def test_site_and_language_are_canonicalized(self):
         self.assertEqual(self.module.canonicalize_site("https://Blog.Example.com/path"), "blog.example.com")

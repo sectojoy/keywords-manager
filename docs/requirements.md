@@ -22,30 +22,23 @@ The skill must support:
 
 This skill is a local single-user keyword management tool. It is not designed as a multi-user or networked service.
 
-Primary storage is SQLite. The skill ships instructions and scripts only. Runtime data must be stored outside the skill folder so that skill upgrades do not overwrite user data.
+Primary storage is SQLite. The skill ships instructions and scripts only. By default, runtime data lives in a user-local directory such as `~/.data/keywords-manager/` so that multiple tools on the same machine (Codex or otherwise) can share the same database. Users who need a different layout must be able to pin a custom path.
 
 ## 3. Storage Strategy
 
 ### 3.1 Database Location
 
-Do not store the SQLite database inside the skill directory.
-
 Recommended default path:
 
 ```text
-$CODEX_HOME/data/keywords-manager/keywords.db
+~/.data/keywords-manager/keywords.db
 ```
 
-Fallback when `CODEX_HOME` is not set:
+Supported explicit overrides:
 
 ```text
-~/.codex/data/keywords-manager/keywords.db
-```
-
-Recommended supporting path:
-
-```text
-$CODEX_HOME/data/keywords-manager/
+KEYWORDS_MANAGER_DB=/custom/path/keywords.db
+KEYWORDS_MANAGER_DATA_DIR=/custom/path
 ```
 
 This directory may also contain:
@@ -56,7 +49,7 @@ This directory may also contain:
 
 ### 3.2 Upgrade Safety
 
-Skill upgrades must not delete or replace the SQLite database.
+The default `~/.data/keywords-manager/` directory must be fully independent of any specific skill installation path so that skill reinstalls or upgrades never delete user data.
 
 The implementation must include schema versioning through one of the following:
 

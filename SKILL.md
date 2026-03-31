@@ -9,7 +9,7 @@ Use `bin/keywords-manager` or `scripts/keywords_manager.py` instead of rewriting
 
 ## Workflow
 
-1. Keep runtime data outside the skill folder.
+1. Keep runtime data in the user-local `~/.data/keywords-manager/` directory by default, or pass `--db-path` for a custom location.
 2. Run the CLI with the default database path or pass `--db-path`.
 3. Let the script initialize or migrate the schema before write operations.
 4. Import keywords into an explicit category.
@@ -18,21 +18,24 @@ Use `bin/keywords-manager` or `scripts/keywords_manager.py` instead of rewriting
 Default database path:
 
 ```text
-$CODEX_HOME/data/keywords-manager/keywords.db
+~/.data/keywords-manager/keywords.db
 ```
 
-Fallback when `CODEX_HOME` is not set:
+Optional explicit storage overrides:
 
 ```text
-~/.codex/data/keywords-manager/keywords.db
+KEYWORDS_MANAGER_DB=/custom/path/keywords.db
+KEYWORDS_MANAGER_DATA_DIR=/custom/path
 ```
 
 Override with either:
 
 - `bin/keywords-manager ...`
 - `--db-path /custom/path/keywords.db`
-- `CODEX_HOME=/custom/codex-home`
 - `KEYWORDS_MANAGER_DB=/custom/path/keywords.db`
+- `KEYWORDS_MANAGER_DATA_DIR=/custom/path`
+
+If you want to keep data completely independent from any specific skill install directory or tool, pin a shared absolute path with `KEYWORDS_MANAGER_DB` or `KEYWORDS_MANAGER_DATA_DIR` (or pass `--db-path`).
 
 ## Data Rules
 
